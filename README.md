@@ -33,4 +33,4 @@ Another way to check the data read from the sensors is using the telegram bot th
 :-------------------------:|:-------------------------:
 <img src="images/TelegramBot.jpg" width="500"> |  <img src="images/TelegramBot2.jpg" width="500">
 
-This feature has been implemented to accommodate the need to know if the window of the room where the sensors are has been left open for a long period of time, which is especially useful in winter.
+This feature has been implemented to accommodate the need to know if the window of the room where the sensors are located has been left open for a long period of time, which is especially useful in winter.
