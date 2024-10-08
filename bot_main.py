@@ -60,8 +60,7 @@ async def check_temperature(app: Application):
             "Umidità interna" : reading[1],
             "Pressione armosferica" : reading[2],
             "Temperatura esterna" : reading[3],
-            "Umidità esterna" : reading[4],
-            "Livello di CO₂" : reading[5]
+            "Umidità esterna" : reading[4]
         }
 
         db.child("Status").push(data)
@@ -96,8 +95,7 @@ async def reading_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "Umidità interna: {} %",
                 "Pressione atmosferica: {} hPa",
                 "Temperatura esterna: {} °C",
-                "Umidità esterna: {} %",
-                "Livello di CO₂: {} ppm"
+                "Umidità esterna: {} %"
             ]
             combined_message = "\n".join(message.format(value) for message, value in zip(message_values, reading))  # Usa reading direttamente
             print(f"\nMessaggio inviato: ({combined_message})")

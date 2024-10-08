@@ -23,7 +23,7 @@ write_api = client.write_api(write_options=SYNCHRONOUS)
 reading_lock = threading.Lock()
 
 # Crea una variabile globale per memorizzare i dati del sensore
-reading = [0, 0, 0, 0, 0, 0]
+reading = [0, 0, 0, 0, 0]
 
 reading_queue = queue.Queue()
 
@@ -35,7 +35,7 @@ def read_sensor_data():
             line = line.decode()  # Decodifica i dati in una stringa
             fields = line.strip().split(',')
 
-            if len(fields) == 6:
+            if len(fields) == 5:
                 # Aggiorna la variabile reading con i nuovi dati del sensore
                 reading = [float(field) for field in fields]
 
@@ -45,7 +45,7 @@ def read_sensor_data():
                         reading_queue.get()
                     reading_queue.put(reading)
 
-                print('I. Temperature: %s, I. Humidity: %s, Pressure: %s, E. Temperature: %s, E. Humidity: %s, CO2: %s' % tuple(reading))
+                print('I. Temperature: %s, I. Humidity: %s, Pressure: %s, E. Temperature: %s, E. Humidity: %s' % tuple(reading))
 
                 it = Point("temperature").tag("source", DEVICE_NAME).field("value", reading[0])
                 write_api.write(bucket="weatherdb", org="IoT_Database", record=it)
@@ -57,8 +57,6 @@ def read_sensor_data():
                 write_api.write(bucket="weatherdb", org="IoT_Database", record=et)
                 eh = Point("Ehumidity").tag("source", DEVICE_NAME).field("value", reading[4])
                 write_api.write(bucket="weatherdb", org="IoT_Database", record=eh)
-                Co2 = Point("CO2").tag("source", DEVICE_NAME).field("value", reading[5])
-                write_api.write(bucket="weatherdb", org="IoT_Database", record=Co2)
 
         except UnicodeDecodeError:
             print("Errore di decodifica: La riga non è una stringa valida.")
