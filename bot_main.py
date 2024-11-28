@@ -11,7 +11,7 @@ import pyrebase
 from config import BOT_TOKEN, BOT_USERNAME, AUTH_USER_ID
 
 # Variabile globale per tenere traccia dell'ultimo momento in cui la temperatura era sotto 15.0
-last_time_below_15 = None
+last_time_below_14 = None
 
 last_message_time = None
 
@@ -24,12 +24,12 @@ configuration = {
     "storageBucket": FIREBASE_STORAGE_BUCKET
 }
 
-firebase = pyrebase.initialize_app(configuration)
-db = firebase.database()
+#firebase = pyrebase.initialize_app(configuration)
+#db = firebase.database()
 
 
 async def check_temperature(app: Application):
-    global last_time_below_15, last_message_time
+    global last_time_below_14, last_message_time
     while True:
         with reading_lock:
             # Preleva l'ultimo valore di reading senza rimuoverlo dalla coda
@@ -37,22 +37,21 @@ async def check_temperature(app: Application):
 
         if current_reading is not None:
             internal_temperature = current_reading[0]
-            print(f"Temperatura corrente: {internal_temperature}")  # Aggiunto per il debug
-            if internal_temperature < 15.0:
-                if last_time_below_15 is None:
-                    last_time_below_15 = datetime.now()
+            if internal_temperature < 14.0:
+                if last_time_below_14 is None:
+                    last_time_below_14 = datetime.now()
                 else:
-                    elapsed_minutes = (datetime.now() - last_time_below_15).total_seconds() / 60
-                    print(f"Temperatura interna sotto i 15.0°C per {int(elapsed_minutes)} minuti")
+                    elapsed_minutes = (datetime.now() - last_time_below_14).total_seconds() / 60
+                    print(f"Temperatura interna sotto i 14.0°C per {int(elapsed_minutes)} minuti")
                     if elapsed_minutes >= 15 and (last_message_time is None or (datetime.now() - last_message_time).total_seconds() >= 5 * 60):  # 5 minuti
-                        print("Invio messaggio di allarme")  # Aggiunto per il debug
-                        await app.bot.send_message(chat_id=AUTH_USER_ID, text=f"*Attenzione:* la temperatura interna è rimasta sotto 15.0°C da {int(elapsed_minutes)} minuti! 🥶", parse_mode='Markdown')
+                        print(f"\nInvio messaggio di allarme\nTemperatura interna pari a {int(internal_temperature)}\n")  # Aggiunto per il debug
+                        await app.bot.send_message(chat_id=AUTH_USER_ID, text=f"*Attenzione:* la temperatura interna è rimasta sotto 14.0°C da {int(elapsed_minutes)} minuti! 🥶", parse_mode='Markdown')
                         last_message_time = datetime.now()
             else:
-                print("Temperatura sopra i 15.0°C")  # Aggiunto per il debug
-                last_time_below_15 = None  # Reset del timer se la temperatura è sopra 15.0
+                last_time_below_14 = None  # Reset del timer se la temperatura è sopra 15.0
                 last_message_time = None
-
+        '''
+        # VECCHIA CONFIG PER FIREBASE
         #print(reading_queue.get())
         reading = reading_queue.get()
         data = {
@@ -62,12 +61,11 @@ async def check_temperature(app: Application):
             "Temperatura esterna" : reading[3],
             "Umidità esterna" : reading[4]
         }
-
         db.child("Status").push(data)
 
         db.update(data)
         print("Dati inviati a Firebase")
-
+        '''
         await asyncio.sleep(30)  # Controlla la temperatura ogni 30 secondi
 
 
@@ -98,7 +96,7 @@ async def reading_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "Umidità esterna: {} %"
             ]
             combined_message = "\n".join(message.format(value) for message, value in zip(message_values, reading))  # Usa reading direttamente
-            print(f"\nMessaggio inviato: ({combined_message})")
+            print(f"\nMessaggio inviato a {update.message.chat.id}: \n{combined_message}\n")
             await update.message.reply_text(f"*Valori attuali 🌡️:*\nOra: {current_time}\nData: {current_date}\n\n{combined_message}", parse_mode='Markdown')
 
 

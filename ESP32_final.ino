@@ -4,6 +4,7 @@
 #include <DHT.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+//#include <MQUnifiedsensor.h>
 
 #define BUTTON_PIN 18 // GPIO18 pin connected to button
 int lastState = HIGH; // the previous state from the input pin
@@ -29,6 +30,14 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT);
 DHT dht1(DHTPIN1, DHTTYPE); //Inizializza oggetto chiamato "dht", parametri: pin a cui è connesso il sensore, tipo di dht 11/22
 DHT dht2(DHTPIN2, DHTTYPE); //dht1 è il sensore interno. dht2 è il sensore esterno
 
+//MQ135
+//#define MQ135PIN 32
+//#define R0_PRECISION 100
+//#define RatioMQ135CleanAir 3.6//RS / R0 = 3.6 ppm
+
+//Declare Sensor
+//MQUnifiedsensor MQ135("ESP32", 5, 10, MQ135PIN, "MQ-135");
+
 void setup() {
   Serial.begin(9600);
   dht1.begin();
@@ -48,6 +57,32 @@ void setup() {
 
   // SSD1306_SWITCHCAPVCC = generate display voltage from 3.3V internally
   display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR);
+/*
+  //MQ135
+  MQ135.setRegressionMethod(1); //_PPM =  a*ratio^b
+  MQ135.setA(110.47); MQ135.setB(-2.862); // Configure the equation to calculate CO2 concentration value
+  MQ135.init();
+
+  Serial.print("Calibrating please wait ...");
+  float calcR0 = 0;
+  for (int i = 1; i <= R0_PRECISION; i ++)
+  {
+    MQ135.update(); // Update data, read the voltage from the analog pin
+    calcR0 += MQ135.calibrate(RatioMQ135CleanAir);
+    Serial.print(".");
+  }
+  MQ135.setR0(calcR0 / R0_PRECISION);
+  Serial.println("  done!");
+
+  if (isinf(calcR0)) {
+    Serial.println("Warning: Conection issue, R0 is infinite (Open circuit detected) please check your wiring and supply");
+    while (1);
+  }
+  if (calcR0 == 0) {
+    Serial.println("Warning: Conection issue found, R0 is zero (Analog pin shorts to ground) please check your wiring and supply");
+    while (1);
+  }
+*/
   pinMode(BUTTON_PIN, INPUT_PULLUP);
 
 }
@@ -75,6 +110,13 @@ void loop() {
     previousMillis = currentMillis;
   
   //da qui parte il codice
+/*
+  //Lettura valori da MQ135
+  MQ135.update(); // Update data, read the voltage from the analog pin
+  float CO2 = MQ135.readSensor() + 400; // Sensor will read PPM concentration using the model, a and b values set previously or from the setup (400ppm offset due to current pollution)
+  if (CO2 > 15000){
+    CO2 = 15000;
+  }*/
 
   sensors_event_t pressure_event;
   bmp_pressure->getEvent(&pressure_event);
@@ -95,6 +137,8 @@ void loop() {
   Serial.print(te);
   Serial.print(" , ");
   Serial.print(he);
+//  Serial.print(" , ");
+//  Serial.print(CO2);
   Serial.println();
 
   //Stampa su display OLED
@@ -123,6 +167,9 @@ void loop() {
   display.print("Atm pres: ");
   display.print(p);
   display.println(" hPa");
+//  display.print("CO2: ");
+//  display.print(CO2);
+//  display.println(" PPM");
 
   display.display();
   }

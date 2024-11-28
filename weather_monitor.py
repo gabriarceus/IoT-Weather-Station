@@ -4,6 +4,7 @@ import serial
 import threading
 import queue
 from config import DB_TOKEN
+import datetime
 
 DEVICE_NAME="ESP32"
 BAUDRATE=9600
@@ -45,7 +46,8 @@ def read_sensor_data():
                         reading_queue.get()
                     reading_queue.put(reading)
 
-                print('I. Temperature: %s, I. Humidity: %s, Pressure: %s, E. Temperature: %s, E. Humidity: %s' % tuple(reading))
+                timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                print(f'INFO: {timestamp} - I. Temperature: {reading[0]}, I. Humidity: {reading[1]}, Pressure: {reading[2]}, E. Temperature: {reading[3]}, E. Humidity: {reading[4]}')
 
                 it = Point("temperature").tag("source", DEVICE_NAME).field("value", reading[0])
                 write_api.write(bucket="weatherdb", org="IoT_Database", record=it)
