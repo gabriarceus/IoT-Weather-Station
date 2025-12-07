@@ -1,21 +1,21 @@
 from typing import List, Optional, Final
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
 from weather_monitor import reading_queue, reading_lock
 from datetime import datetime
 import asyncio
 import pyrebase
 
 
-# IMPORTANTE: inserire il token fornito dal BotFather nel file config.py
+# IMPORTANT: insert the token provided by BotFather in the config.py file
 from config import BOT_TOKEN, BOT_USERNAME, AUTH_USER_ID
 
-# Variabile globale per tenere traccia dell'ultimo momento in cui la temperatura era sotto 15.0
+# Global variable to keep track of the last time the temperature was below 14.0
 last_time_below_14 = None
 
 last_message_time = None
 
-#Configurazione per Firebase
+# Firebase Configuration
 from config import FIREBASE_WEB_API_KEY, FIREBASE_AUTH_DOMAIN, FIREBASE_DB_URL, FIREBASE_STORAGE_BUCKET
 configuration = {
     "apiKey": FIREBASE_WEB_API_KEY,
@@ -27,12 +27,15 @@ configuration = {
 #firebase = pyrebase.initialize_app(configuration)
 #db = firebase.database()
 
+# Conversation states
+WAITING_FOR_TEMPERATURE = range(1)
+
 
 async def check_temperature(app: Application):
     global last_time_below_14, last_message_time
     while True:
         with reading_lock:
-            # Preleva l'ultimo valore di reading senza rimuoverlo dalla coda
+            # Retrieve the last reading value without removing it from the queue
             current_reading = reading_queue.queue[0] if not reading_queue.empty() else None
 
         if current_reading is not None:
@@ -43,15 +46,15 @@ async def check_temperature(app: Application):
                 else:
                     elapsed_minutes = (datetime.now() - last_time_below_14).total_seconds() / 60
                     print(f"Temperatura interna sotto i 14.0°C per {int(elapsed_minutes)} minuti")
-                    if elapsed_minutes >= 15 and (last_message_time is None or (datetime.now() - last_message_time).total_seconds() >= 5 * 60):  # 5 minuti
-                        print(f"\nInvio messaggio di allarme\nTemperatura interna pari a {int(internal_temperature)}\n")  # Aggiunto per il debug
+                    if elapsed_minutes >= 15 and (last_message_time is None or (datetime.now() - last_message_time).total_seconds() >= 5 * 60):  # 5 minutes
+                        print(f"\nInvio messaggio di allarme\nTemperatura interna pari a {int(internal_temperature)}\n")  # Added for debugging
                         await app.bot.send_message(chat_id=AUTH_USER_ID, text=f"*Attenzione:* la temperatura interna è rimasta sotto 14.0°C da {int(elapsed_minutes)} minuti! 🥶", parse_mode='Markdown')
                         last_message_time = datetime.now()
             else:
-                last_time_below_14 = None  # Reset del timer se la temperatura è sopra 15.0
+                last_time_below_14 = None  # Reset timer if temperature is above 14.0
                 last_message_time = None
         '''
-        # VECCHIA CONFIG PER FIREBASE
+        # OLD FIREBASE CONFIG
         #print(reading_queue.get())
         reading = reading_queue.get()
         data = {
@@ -66,26 +69,25 @@ async def check_temperature(app: Application):
         db.update(data)
         print("Dati inviati a Firebase")
         '''
-        await asyncio.sleep(30)  # Controlla la temperatura ogni 30 secondi
+        await asyncio.sleep(30)  # Check temperature every 30 seconds
 
 
-# Comandi
+# Commands
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.chat.id == AUTH_USER_ID:
         await update.message.reply_text("Ora sono pronto a darti tutte le informazioni che ti servono sulla mia stanza ☺️\nControlla nel pannello dei comandi per vedere cosa posso fare! 🤭")
     else:
-        await update.message.reply_text("Non hai il permesso di usare questo bot 🚫")
-        print(f"L'utente ({update.message.chat.id}) non ha i permessi necessari per usare il bot")
+        await no_permission_response(update)
 
 async def reading_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Preleva i dati del sensore dalla coda
+    # Retrieve sensor data from the queue
     reading = reading_queue.get()
 
     now = datetime.now()
     current_time = now.strftime("%H:%M:%S")
     current_date = now.strftime("%d/%m/%Y")
     
-    # Blocca l'accesso alla variabile condivisa
+    # Lock access to the shared variable
     with reading_lock:
         if update.message.chat.id == AUTH_USER_ID:
             message_values = [
@@ -95,18 +97,68 @@ async def reading_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "Temperatura esterna: {} °C",
                 "Umidità esterna: {} %"
             ]
-            combined_message = "\n".join(message.format(value) for message, value in zip(message_values, reading))  # Usa reading direttamente
+            combined_message = "\n".join(message.format(value) for message, value in zip(message_values, reading))  # Use reading directly
             print(f"\nMessaggio inviato a {update.message.chat.id}: \n{combined_message}\n")
             await update.message.reply_text(f"*Valori attuali 🌡️:*\nOra: {current_time}\nData: {current_date}\n\n{combined_message}", parse_mode='Markdown')
 
 
         else:
-            await update.message.reply_text("Non hai il permesso di usare questo bot 🚫")
-            print(f"L'utente ({update.message.chat.id}) non ha i permessi necessari per usare il bot")
+            await no_permission_response(update)
+
+## Sends a message when the temperature reaches the specified value
+async def temperature_alert_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.chat.id == AUTH_USER_ID:
+        await update.message.reply_text("Inserisci la temperatura a cui vuoi ricevere un allarme 🔔")
+        return WAITING_FOR_TEMPERATURE
+    else:
+        await no_permission_response(update)
+        return ConversationHandler.END
+
+async def set_temperature_alert(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.chat.id == AUTH_USER_ID:
+        try:
+            desired_temperature = float(update.message.text)
+            context.user_data['desired_temperature'] = desired_temperature
+            await update.message.reply_text(f"Allarme impostato per {desired_temperature}°C. \nTi avviserò quando la temperatura interna raggiungerà questo valore.")
+            return ConversationHandler.END
+        except ValueError:
+            await update.message.reply_text("Per favore, inserisci un numero valido.")
+            return WAITING_FOR_TEMPERATURE
+    else:
+        await no_permission_response(update)
+        return ConversationHandler.END
+
+async def check_temperature_with_alert(app: Application, context: ContextTypes.DEFAULT_TYPE):
+    while True:
+        with reading_lock:
+            current_reading = reading_queue.queue[0] if not reading_queue.empty() else None
+
+        if current_reading is not None:
+            internal_temperature = current_reading[0]
+            for user_id, user_data in app.user_data.items():
+                if 'desired_temperature' in user_data:
+                    desired_temperature = user_data['desired_temperature']
+                    print(f"\nUser {user_id} has set an alert for {desired_temperature}°C\n")  # Debugging line
+                    if internal_temperature >= desired_temperature:
+                        await app.bot.send_message(chat_id=user_id, text=f"*Attenzione:* la temperatura interna ha raggiunto {internal_temperature}°C! 🔥", parse_mode='Markdown')
+                        del user_data['desired_temperature']
+                        print(f"\nAlert sent to user {user_id}\n")  # Debugging line
+
+        await asyncio.sleep(30)
 
 
+# Command to delete all temperatures from the queue
+async def delete_all_temperatures_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.chat.id == AUTH_USER_ID:
+        for user_id, user_data in context.application.user_data.items():
+            if 'desired_temperature' in user_data:
+                del user_data['desired_temperature']
+        await update.message.reply_text("Tutte le temperature impostate sono state rimosse.")
+    else:
+        await no_permission_response(update)
 
-# Risposte
+
+# Responses
 def handle_response(text: str) -> str:
     processed: str = text.lower()
 
@@ -115,7 +167,12 @@ def handle_response(text: str) -> str:
 
     return "Non ho capito cosa vuoi dire oppure il comando non esiste 😕"
 
-# Messaggi
+# Response for unauthorized users
+async def no_permission_response(update: Update):
+    await update.message.reply_text("Non hai il permesso di usare questo bot 🚫")
+    print(f"L'utente ({update.message.chat.id}) non ha i permessi necessari per usare il bot")
+
+# Messages
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message_type: str = update.message.chat.type
     text: str = update.message.text
@@ -130,7 +187,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 response = handle_response(new_text)
             else:
                 response = "Non disponi dei permessi per poter parlare con me 🚫"
-        # Meglio separare gli if così se mi trovo in una chat di gruppo e sono autenticato, ma non ho chiesto esplicitamente al bot di scrivermi non scrive nulla
+        # Better to separate the ifs so if I am in a group chat and authenticated,
+        # but haven't explicitly asked the bot to write to me, it writes nothing
         else:
             return
     else:
@@ -151,21 +209,33 @@ if __name__ == "__main__":
     print("Starting bot...")
     app = Application.builder().token(BOT_TOKEN).build()
 
-    # Comandi
+    # Commands
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("reading", reading_command))
+    app.add_handler(CommandHandler("delete_temperature", delete_all_temperatures_command))
 
-    # Messaggi
+    # Conversation handler for temperature alert
+    conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("temperature_alert", temperature_alert_command)],
+        states={
+            WAITING_FOR_TEMPERATURE: [MessageHandler(filters.TEXT & ~filters.COMMAND, set_temperature_alert)],
+        },
+        fallbacks=[],
+    )
+    app.add_handler(conv_handler)
+
+    # Messages
     app.add_handler(MessageHandler(filters.TEXT, handle_message))
 
     # Errors
     app.add_error_handler(error)
 
-    # Avvia il task per controllare la temperatura
+    # Start the task to check temperature
     loop = asyncio.get_event_loop()
     loop.create_task(check_temperature(app))
+    loop.create_task(check_temperature_with_alert(app, context=ContextTypes.DEFAULT_TYPE))
 
 
-    # Polling al bot
+    # Bot polling
     print("Polling...")
     app.run_polling(poll_interval=3)
