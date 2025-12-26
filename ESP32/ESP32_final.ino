@@ -5,6 +5,7 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <WiFi.h>
+#include <time.h>
 
 // --- FIREBASE LIBRARIES ---
 #include <Firebase_ESP_Client.h>
@@ -19,9 +20,12 @@
 #define DHTPIN2 17     // GPIO17 connected to External DHT
 
 // --- GLOBAL VARIABLES ---
-int lastButtonState = HIGH;        // Previous state of the button
-unsigned long previousMillis = 0;  // Stores last time data was read
-const long interval = 5000;        // Delay to read from sensors in ms (5 seconds)
+int lastButtonState = HIGH;               // Previous state of the button
+unsigned long previousMillis = 0;         // Timer for RTDB (Fast)
+unsigned long previousHistoryMillis = 0;  // Timer for Firestore (Slow)
+
+const long interval = 5000;          // RTDB update: every 5 seconds
+const long historyInterval = 60000;  // Firestore history: every 60 seconds
 
 // Display state variables
 bool displayOn = true;  // Tracks if the display is currently On or Off
@@ -33,7 +37,6 @@ FirebaseData fbdo;
 FirebaseAuth auth;
 FirebaseConfig config;
 bool signupOK = false;  // True if connection is succesful
-
 
 // --- OBJECTS ---
 Adafruit_BMP280 bmp;  // I2C Interface
@@ -56,14 +59,14 @@ void printBootStatus(String message, String subMessage = "") {
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(WHITE);
-  display.setCursor(0, 0);
-  display.println(F("--- SYSTEM BOOT ---"));
+  display.setCursor(20, 5);
+  display.println(F("SYSTEM BOOT"));
 
-  display.setCursor(0, 15);
+  display.setCursor(0, 25);
   display.println(message);
 
   if (subMessage != "") {
-    display.setCursor(0, 35);
+    display.setCursor(0, 45);
     display.println(subMessage);
   }
 
@@ -125,7 +128,11 @@ void setup() {
   // Essential for SSL/Firebase connection
   Serial.print("Syncing time (NTP)...");
   printBootStatus("Syncing Time (NTP)...");
-  configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+  configTime(0, 0, "time.google.com", "pool.ntp.gov");
+
+  // Rome timezone
+  setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 1);
+  tzset();
 
   time_t now = time(nullptr);
   int retry = 0;
@@ -143,8 +150,15 @@ void setup() {
     delay(2000);
   } else {
     Serial.println("\nTime synced!");
-    printBootStatus("Time Synced!", "SSL Ready");
-    delay(1000);
+    // --- SHOW TIME ON BOOT DISPLAY ---
+    struct tm *timeinfo = localtime(&now);
+    char timeBuffer[10];
+    // Format the time as HH:MM into the buffer
+    sprintf(timeBuffer, "%02d:%02d", timeinfo->tm_hour, timeinfo->tm_min);
+
+    printBootStatus("Time Synced!", String(timeBuffer));
+
+    delay(2000);
   }
 
   // --- FIREBASE SETUP ---
@@ -215,10 +229,13 @@ void loop() {
     bmp_pressure->getEvent(&pressure_event);
 
     float hi = dht1.readHumidity();
-    float ti = dht1.readTemperature() - 2.0;  // Manual offset correction
-    float he = dht2.readHumidity() - 2.5;     // Manual offset correction
-    float te = dht2.readTemperature() - 1.5;  // Manual offset correction
+    float ti = dht1.readTemperature();
+    float he = dht2.readHumidity();
+    float te = dht2.readTemperature();
     float p = pressure_event.pressure;
+
+    // Get current timestamp
+    time_t now = time(nullptr);
 
     // Serial Debug output
     Serial.print("T_Int: ");
@@ -232,33 +249,17 @@ void loop() {
     Serial.print(" | H_Ext: ");
     Serial.println(he);
 
-    // Firebase data sending
-    if (Firebase.ready() && signupOK) {
-      // Use setFloatAsync to not block for too long loop, or setFloat
-      // Path: /Sensors/Internal/Temp, ecc.
-
-      if (Firebase.RTDB.setFloat(&fbdo, "/Sensors/Internal/Temperature", ti)) {
-        Serial.print("Firebase Send OK: ");
-        Serial.println(fbdo.floatData());
-      } else {
-        Serial.print("Firebase Error: ");
-        Serial.println(fbdo.errorReason());
-      }
-
-      Firebase.RTDB.setFloat(&fbdo, "/Sensors/Internal/Humidity", hi);
-      Firebase.RTDB.setFloat(&fbdo, "/Sensors/External/Temperature", te);
-      Firebase.RTDB.setFloat(&fbdo, "/Sensors/External/Humidity", he);
-      Firebase.RTDB.setFloat(&fbdo, "/Sensors/Pressure", p);
-    }
-
     // Update display ONLY if it is currently ON (saves time)
     if (displayOn) {
       display.clearDisplay();
 
+      // Timestamp 'now' in readable format
+      struct tm *timeinfo = localtime(&now);
+
       display.setTextSize(2);
       display.setTextColor(WHITE);
-      display.setCursor(0, 0);
-      display.println("Values");
+      display.setCursor(20, 0);
+      display.printf("%02d:%02d", timeinfo->tm_hour, timeinfo->tm_min);
 
       display.setTextSize(1);
       display.setCursor(0, 17);
@@ -280,6 +281,63 @@ void loop() {
       display.println(" hPa");
 
       display.display();
+    }
+
+    // Firebase data sending
+    if (Firebase.ready() && signupOK) {
+      // Use setFloatAsync to not block for too long loop, or setFloat
+      // Path: /Sensors/Internal/Temp, ecc.
+
+      // RTDB update
+      if (Firebase.RTDB.setFloat(&fbdo, "/Sensors/Internal/Temperature", ti)) {
+        Serial.println("Firebase Send OK!");
+      } else {
+        Serial.print("Firebase Error: ");
+        Serial.println(fbdo.errorReason());
+      }
+
+      Firebase.RTDB.setFloat(&fbdo, "/Sensors/Internal/Humidity", hi);
+      Firebase.RTDB.setFloat(&fbdo, "/Sensors/External/Temperature", te);
+      Firebase.RTDB.setFloat(&fbdo, "/Sensors/External/Humidity", he);
+      Firebase.RTDB.setFloat(&fbdo, "/Sensors/Pressure", p);
+
+      // Firestore update
+      if (currentMillis - previousHistoryMillis >= historyInterval) {
+        previousHistoryMillis = currentMillis;
+
+        Serial.println("Preparing Firestore upload...");
+
+        // Create JSON for Firestore
+        // Firestore requires explicit typing (doubleValue, integerValue)
+        FirebaseJson content;
+
+        content.set("fields/timestamp/integerValue", (int)now);
+
+        if (!isnan(ti))
+          content.set("fields/temperature_i/doubleValue", ti);
+        if (!isnan(hi))
+          content.set("fields/humidity_i/doubleValue", hi);
+        if (!isnan(te))
+          content.set("fields/temperature_e/doubleValue", te);
+        if (!isnan(he))
+          content.set("fields/humidity_e/doubleValue", he);
+        if (!isnan(p))
+          content.set("fields/pressure/doubleValue", p);
+
+        // Define path: Collection "history" -> Document ID (Timestamp)
+        String docId = String((int)now);
+
+        // Combine collection and document ID into a single path string to avoid ambiguity error
+        String documentPath = "history/" + docId;
+
+        // We pass documentPath instead of separating collection and ID
+        if (Firebase.Firestore.createDocument(&fbdo, FIREBASE_PROJECT_ID, "(default)", documentPath.c_str(), content.raw())) {
+          Serial.println("Firestore History Saved!");
+        } else {
+          Serial.print("Firestore Error: ");
+          Serial.println(fbdo.errorReason());
+        }
+      }
     }
   }
 }
